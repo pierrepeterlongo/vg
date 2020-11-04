@@ -15,7 +15,7 @@ using namespace vg;
 using namespace vg::subcommand;
 
 void help_map(char** argv) {
-    cerr << "usage: " << argv[0] << " map [options] -d idxbase -f in1.fq [-f in2.fq] >aln.gam" << endl
+    cerr << "usage: " << argv[0] << " map [options] -d idxbase -f in1.fq [-f in2.fq] --read_to_species r2s.txt --species_id INT >aln.gam" << endl
          << "Align reads to a graph." << endl
          << endl
          << "graph/index:" << endl
@@ -80,6 +80,8 @@ void help_map(char** argv) {
          << "    -i, --interleaved             fastq or GAM is interleaved paired-ended" << endl
          << "    -N, --sample NAME             for --reads input, add this sample" << endl
          << "    -R, --read-group NAME         for --reads input, add this read group" << endl
+         << "    --read_to_species FILE        specify for each read to which species it belongs to" << endl
+         << "    --species_id INT              map only reads the belong to this species" << endl
          << "output:" << endl
          << "    -j, --output-json             output JSON rather than an alignment stream (helpful for debugging)" << endl
          << "    --surject-to TYPE             surject the output into the graph's paths, writing TYPE := bam |sam | cram" << endl
@@ -105,6 +107,8 @@ int main_map(int argc, char** argv) {
     #define OPT_SCORE_MATRIX 1000
     #define OPT_RECOMBINATION_PENALTY 1001
     #define OPT_EXCLUDE_UNALIGNED 1002
+    #define OPT_READ_TO_SPECIES 1003
+    #define OPT_SPECIES_ID 1004
     string matrix_file_name;
     string seq;
     string qual;
@@ -116,6 +120,8 @@ int main_map(int argc, char** argv) {
     string read_file;
     string hts_file;
     string fasta_file;
+    string readToSpeciesFile;
+    int speciesId;
     bool keep_secondary = false;
     int hit_max = 2048;
     int max_multimaps = 1;
@@ -238,6 +244,8 @@ int main_map(int argc, char** argv) {
                 {"full-l-bonus", required_argument, 0, 'L'},
                 {"hap-exp", required_argument, 0, 'a'},
                 {"recombination-penalty", required_argument, 0, OPT_RECOMBINATION_PENALTY},
+                {"read_to_species", required_argument, 0, OPT_READ_TO_SPECIES},
+                {"species_id", required_argument, 0, OPT_SPECIES_ID},
                 {"alignment-model", required_argument, 0, 'm'},
                 {"mem-chance", required_argument, 0, 'e'},
                 {"drop-chain", required_argument, 0, 'C'},
@@ -329,6 +337,14 @@ int main_map(int argc, char** argv) {
             
         case OPT_RECOMBINATION_PENALTY:
             recombination_penalty = parse<double>(optarg);
+            break;
+
+        case OPT_READ_TO_SPECIES:
+            readToSpeciesFile = optarg;
+            break;
+
+        case OPT_SPECIES_ID:
+            speciesId = parse<int>(optarg);
             break;
         
         case 'm':
@@ -874,111 +890,23 @@ int main_map(int argc, char** argv) {
     }
 
     if (!read_file.empty()) {
-        ifstream in(read_file);
-        bool more_data = in.good();
-#pragma omp parallel shared(in)
-        {
-            string line;
-            int tid = omp_get_thread_num();
-            while (in.good()) {
-                line.clear();
-#pragma omp critical (readq)
-                {
-                    std::getline(in,line);
-                }
-                if (!line.empty()) {
-                    // Make an alignment
-                    Alignment unaligned;
-                    unaligned.set_sequence(line);
-                    vector<Alignment> alignments = mapper[tid]->align_multi(unaligned,
-                                                                            kmer_size,
-                                                                            kmer_stride,
-                                                                            max_mem_length,
-                                                                            band_width,
-                                                                            band_overlap,
-                                                                            xdrop_alignment);
-                    
-
-                    for(auto& alignment : alignments) {
-                        // Set the alignment metadata
-                        if (!sample_name.empty()) alignment.set_sample_name(sample_name);
-                        if (!read_group.empty()) alignment.set_read_group(read_group);
-                    }
-
-
-                    // Output the alignments in the correct format, possibly surjecting. 
-                    output_alignments(alignments, empty_alns);
-                }
-            }
-        }
+        cerr<<"-T option not implemented with this customized version"<<endl;
+        exit(1);
     }
 
-    if (!fasta_file.empty()) {
-        FastaReference ref;
-        ref.open(fasta_file);
-        auto align_seq = [&](const string& name, const string& seq) {
-            if (!seq.empty()) {
-                // Make an alignment
-                Alignment unaligned;
-                unaligned.set_sequence(seq);
-                unaligned.set_name(name);
-                int tid = omp_get_thread_num();
-                vector<Alignment> alignments = mapper[tid]->align_multi(unaligned,
-                                                                        kmer_size,
-                                                                        kmer_stride,
-                                                                        max_mem_length,
-                                                                        band_width,
-                                                                        band_overlap,
-                                                                        xdrop_alignment);
-                
-                for(auto& alignment : alignments) {
-                    // Set the alignment metadata
-                    if (!sample_name.empty()) alignment.set_sample_name(sample_name);
-                    if (!read_group.empty()) alignment.set_read_group(read_group);
-                }
-                // Output the alignments in the correct format, possibly surjecting.
-                output_alignments(alignments, empty_alns);
-            }
-        };
-#pragma omp parallel for
-        for (size_t i = 0; i < ref.index->sequenceNames.size(); ++i) {
-            auto& name = ref.index->sequenceNames[i];
-            string seq = nonATGCNtoN(toUppercase(ref.getSequence(name)));
-            align_seq(name, seq);
-        }
+    if (!fasta_file.empty()) { // PP: case one unique fasta file (more than one line per read)
+        cerr<<"-F option not implemented with this customized version"<<endl;
+        exit(1);
     }
 
     if (!hts_file.empty()) {
-        function<void(Alignment&)> lambda = [&](Alignment& alignment) {
-            if(alignment.is_secondary() && !keep_secondary) {
-                // Skip over secondary alignments in the input; we don't want several output mappings for each input *mapping*.
-                return;
-            }
-
-            int tid = omp_get_thread_num();
-            vector<Alignment> alignments = mapper[tid]->align_multi(alignment,
-                                                                    kmer_size,
-                                                                    kmer_stride,
-                                                                    max_mem_length,
-                                                                    band_width,
-                                                                    band_overlap,
-                                                                    xdrop_alignment);
-                                                                    
-            for(auto& alignment : alignments) {
-                // Set the alignment metadata
-                if (!sample_name.empty()) alignment.set_sample_name(sample_name);
-                if (!read_group.empty()) alignment.set_read_group(read_group);
-            }
-
-            // Output the alignments in JSON or protobuf as appropriate.
-            output_alignments(alignments, empty_alns);
-        };
-        // run
-        hts_for_each_parallel(hts_file, lambda);
+        cerr<<"-b option not implemented with this customized version"<<endl;
+        exit(1);
     }
 
     if (!fastq1.empty()) {
         if (interleaved_input) {
+            cerr<<"-i option not implemented with this customized version"<<endl;
             // paired interleaved
             auto output_func = [&](Alignment& aln1,
                                    Alignment& aln2,
@@ -1019,7 +947,7 @@ int main_map(int argc, char** argv) {
                     }
                 }
             };
-            fastq_paired_interleaved_for_each_parallel(fastq1, lambda);
+            fastq_paired_interleaved_for_each_parallel(fastq1, lambda); 
 #pragma omp parallel
             { // clean up buffered alignments that weren't perfect
                 auto our_mapper = mapper[omp_get_thread_num()];
@@ -1051,7 +979,7 @@ int main_map(int argc, char** argv) {
                         //cerr << "This is just before output_alignments" << alignment.DebugString() << endl;
                         output_alignments(alignments, empty_alns);
                     };
-            fastq_unpaired_for_each_parallel(fastq1, lambda);
+            fastq_unpaired_for_each_parallel(fastq1, lambda, readToSpeciesFile, speciesId); // PP: to modify
         } else {
             // paired two-file
             auto output_func = [&](Alignment& aln1,
@@ -1092,7 +1020,7 @@ int main_map(int argc, char** argv) {
                     }
                 }
             };
-            fastq_paired_two_files_for_each_parallel(fastq1, fastq2, lambda);
+            fastq_paired_two_files_for_each_parallel(fastq1, fastq2, lambda); // PP: to modify
 #pragma omp parallel
             {
                 auto our_mapper = mapper[omp_get_thread_num()];

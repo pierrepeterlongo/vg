@@ -110,7 +110,40 @@ bam_hdr_t* hts_string_header(string& header,
     return h;
 }
 
-bool get_next_alignment_from_fastq(gzFile fp, char* buffer, size_t len, Alignment& alignment) {
+bool get_next_alignment_from_fastq(gzFile fp, char* buffer, size_t len, Alignment& alignment, gzFile readToSpeciesFile, const int speciesId, char* speciesBuffer) {
+
+    // This while loop had been added by Pierre Peterlongo on Nov 4th 2020. 
+    // find next valid read wtr to readToSpeciesFile and speciesId
+    int n;
+    while (1){
+        if(0==gzgets(readToSpeciesFile,speciesBuffer,len)){
+            return false; // end of the species file.
+        }
+        speciesBuffer[strlen(speciesBuffer)-1] = '\0';
+        std::stringstream speciesStream(speciesBuffer);
+        // check whether speciesId is in the parsed line
+        bool foundSpecies = false;
+        while(!foundSpecies) {
+            speciesStream >> n;
+            if(!speciesStream)
+                break;
+            if (n == speciesId)
+                foundSpecies = true;
+        }
+        if (foundSpecies){ // The species was found, we add this alignement by gettin to the rest of the function
+            break; 
+        }
+        else  // The species had not been found. We must read the two or four sequence lines depending on the format (resp. fasta or fastq)
+        {
+            gzgets(fp,buffer,len); // read the comment line
+            char first = buffer [0]; // keep track of first char (> or @)
+            gzgets(fp,buffer,len); // read the sequence line
+            if (first == '@'){ // fastq
+                gzgets(fp,buffer,len); // read the second line
+                gzgets(fp,buffer,len); // read the quality line
+            }
+        }
+    }
 
     alignment.Clear();
     bool is_fasta = false;
@@ -158,11 +191,14 @@ bool get_next_alignment_from_fastq(gzFile fp, char* buffer, size_t len, Alignmen
 }
 
 bool get_next_interleaved_alignment_pair_from_fastq(gzFile fp, char* buffer, size_t len, Alignment& mate1, Alignment& mate2) {
-    return get_next_alignment_from_fastq(fp, buffer, len, mate1) && get_next_alignment_from_fastq(fp, buffer, len, mate2);
+    cerr << "interleaved reads not implemented with this version" << endl; 
+    exit(1);
+    return false; 
+    // return get_next_alignment_from_fastq(fp, buffer, len, mate1) && get_next_alignment_from_fastq(fp, buffer, len, mate2);
 }
 
-bool get_next_alignment_pair_from_fastqs(gzFile fp1, gzFile fp2, char* buffer, size_t len, Alignment& mate1, Alignment& mate2) {
-    return get_next_alignment_from_fastq(fp1, buffer, len, mate1) && get_next_alignment_from_fastq(fp2, buffer, len, mate2);
+bool get_next_alignment_pair_from_fastqs(gzFile fp1, gzFile fp2, char* buffer, size_t len, Alignment& mate1, Alignment& mate2, gzFile readToSpeciesFile1, gzFile readToSpeciesFile2, const int speciesId, char* speciesBuffer) {
+    return get_next_alignment_from_fastq(fp1, buffer, len, mate1, readToSpeciesFile1, speciesId, speciesBuffer) && get_next_alignment_from_fastq(fp2, buffer, len, mate2, readToSpeciesFile2, speciesId, speciesBuffer);
 }
 
 size_t unpaired_for_each_parallel(function<bool(Alignment&)> get_read_if_available, function<void(Alignment&)> lambda) {
@@ -345,25 +381,34 @@ size_t paired_for_each_parallel_after_wait(function<bool(Alignment&, Alignment&)
     return nLines;
 }
 
-size_t fastq_unpaired_for_each_parallel(const string& filename, function<void(Alignment&)> lambda) {
-    
+size_t fastq_unpaired_for_each_parallel(const string& filename, function<void(Alignment&)> lambda, const string& readToSpeciesFilename, const int speciesId) {
+    // PP: modified
     gzFile fp = (filename != "-") ? gzopen(filename.c_str(), "r") : gzdopen(fileno(stdin), "r");
     if (!fp) {
         cerr << "[vg::alignment.cpp] couldn't open " << filename << endl; exit(1);
     }
     
+    gzFile readToSpeciesFile = gzopen(readToSpeciesFilename.c_str(), "r");
+    if (!readToSpeciesFile) {
+        cerr << "[vg::alignment.cpp] couldn't open " << readToSpeciesFilename << endl; exit(1);
+    }
+
+
     size_t len = 2 << 22; // 4M
     char* buf = new char[len];
+    char* speciesBuffer = new char[len];
     
     function<bool(Alignment&)> get_read = [&](Alignment& aln) {
-        return get_next_alignment_from_fastq(fp, buf, len, aln);;
+        return get_next_alignment_from_fastq(fp, buf, len, aln, readToSpeciesFile, speciesId, speciesBuffer);
     };
     
     
     size_t nLines = unpaired_for_each_parallel(get_read, lambda);
     
     delete[] buf;
+    delete[] speciesBuffer;
     gzclose(fp);
+    gzclose(readToSpeciesFile);
     return nLines;
     
 }
@@ -416,7 +461,7 @@ size_t fastq_paired_two_files_for_each_parallel_after_wait(const string& file1, 
     char* buf = new char[len];
     
     function<bool(Alignment&, Alignment&)> get_pair = [&](Alignment& mate1, Alignment& mate2) {
-        return get_next_alignment_pair_from_fastqs(fp1, fp2, buf, len, mate1, mate2);
+        return get_next_alignment_pair_from_fastqs(fp1, fp2, buf, len, mate1, mate2, nullptr, nullptr, -1, nullptr); // PP: DEBUG FOR COMPILATION
     };
     
     size_t nLines = paired_for_each_parallel_after_wait(get_pair, lambda, single_threaded_until_true);
@@ -428,21 +473,23 @@ size_t fastq_paired_two_files_for_each_parallel_after_wait(const string& file1, 
 }
 
 size_t fastq_unpaired_for_each(const string& filename, function<void(Alignment&)> lambda) {
-    gzFile fp = (filename != "-") ? gzopen(filename.c_str(), "r") : gzdopen(fileno(stdin), "r");
-    if (!fp) {
-        cerr << "[vg::alignment.cpp] couldn't open " << filename << endl; exit(1);
-    }
-    size_t len = 2 << 22; // 4M
-    size_t nLines = 0;
-    char *buffer = new char[len];
-    Alignment alignment;
-    while(get_next_alignment_from_fastq(fp, buffer, len, alignment)) {
-        lambda(alignment);
-        nLines++;
-    }
-    gzclose(fp);
-    delete[] buffer;
-    return nLines;
+    cerr << "peterlongo: fastq_unpaired_for_each not implemented"<<endl;
+    exit(1);
+    // gzFile fp = (filename != "-") ? gzopen(filename.c_str(), "r") : gzdopen(fileno(stdin), "r");
+    // if (!fp) {
+    //     cerr << "[vg::alignment.cpp] couldn't open " << filename << endl; exit(1);
+    // }
+    // size_t len = 2 << 22; // 4M
+    // size_t nLines = 0;
+    // char *buffer = new char[len];
+    // Alignment alignment;
+    // while(get_next_alignment_from_fastq(fp, buffer, len, alignment)) {
+    //     lambda(alignment);
+    //     nLines++;
+    // }
+    // gzclose(fp);
+    // delete[] buffer;
+    // return nLines;
 }
 
 size_t fastq_paired_interleaved_for_each(const string& filename, function<void(Alignment&, Alignment&)> lambda) {
@@ -464,26 +511,28 @@ size_t fastq_paired_interleaved_for_each(const string& filename, function<void(A
 }
 
 size_t fastq_paired_two_files_for_each(const string& file1, const string& file2, function<void(Alignment&, Alignment&)> lambda) {
-    gzFile fp1 = (file1 != "-") ? gzopen(file1.c_str(), "r") : gzdopen(fileno(stdin), "r");
-    if (!fp1) {
-        cerr << "[vg::alignment.cpp] couldn't open " << file1 << endl; exit(1);
-    }
-    gzFile fp2 = (file2 != "-") ? gzopen(file2.c_str(), "r") : gzdopen(fileno(stdin), "r");
-    if (!fp2) {
-        cerr << "[vg::alignment.cpp] couldn't open " << file2 << endl; exit(1);
-    }
-    size_t len = 2 << 18; // 256k
-    size_t nLines = 0;
-    char *buffer = new char[len];
-    Alignment mate1, mate2;
-    while(get_next_alignment_pair_from_fastqs(fp1, fp2, buffer, len, mate1, mate2)) {
-        lambda(mate1, mate2);
-        nLines++;
-    }
-    gzclose(fp1);
-    gzclose(fp2);
-    delete[] buffer;
-    return nLines;
+    cerr << "peterlongo: fastq_paired_two_files_for_each not implemented"<<endl;
+    exit(1);
+    // gzFile fp1 = (file1 != "-") ? gzopen(file1.c_str(), "r") : gzdopen(fileno(stdin), "r");
+    // if (!fp1) {
+    //     cerr << "[vg::alignment.cpp] couldn't open " << file1 << endl; exit(1);
+    // }
+    // gzFile fp2 = (file2 != "-") ? gzopen(file2.c_str(), "r") : gzdopen(fileno(stdin), "r");
+    // if (!fp2) {
+    //     cerr << "[vg::alignment.cpp] couldn't open " << file2 << endl; exit(1);
+    // }
+    // size_t len = 2 << 18; // 256k
+    // size_t nLines = 0;
+    // char *buffer = new char[len];
+    // Alignment mate1, mate2;
+    // while(get_next_alignment_pair_from_fastqs(fp1, fp2, buffer, len, mate1, mate2)) {
+    //     lambda(mate1, mate2);
+    //     nLines++;
+    // }
+    // gzclose(fp1);
+    // gzclose(fp2);
+    // delete[] buffer;
+    // return nLines;
 
 }
 

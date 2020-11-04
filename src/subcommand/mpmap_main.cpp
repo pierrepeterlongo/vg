@@ -1363,7 +1363,7 @@ int main_mpmap(int argc, char** argv) {
                                                                   multi_threaded_condition);
         }
         else if (fastq_name_2.empty()) {
-            fastq_unpaired_for_each_parallel(fastq_name_1, do_unpaired_alignments);
+            fastq_unpaired_for_each_parallel(fastq_name_1, do_unpaired_alignments, nullptr, -1); // PP modified this to compile
         }
         else {
             fastq_paired_two_files_for_each_parallel_after_wait(fastq_name_1, fastq_name_2, do_paired_alignments,

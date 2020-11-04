@@ -891,7 +891,7 @@ int main_gaffe(int argc, char** argv) {
             
             for (auto& fastq_name : fastq_filenames) {
                 // For every FASTQ file to map, map all its reads in parallel.
-                fastq_unpaired_for_each_parallel(fastq_name, map_read);
+                fastq_unpaired_for_each_parallel(fastq_name, map_read, nullptr, -1); // PP modified this to compile
             }
         
         } // Make sure alignment emitter is destroyed and all alignments are on disk.
