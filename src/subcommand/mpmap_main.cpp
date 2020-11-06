@@ -46,6 +46,8 @@ void help_mpmap(char** argv) {
     << "  -N, --sample NAME             add this sample name to output GAMP" << endl
     << "  -R, --read-group NAME         add this read group to output GAMP" << endl
     << "  -e, --same-strand             read pairs are from the same strand of the DNA molecule" << endl
+    << "  --read_to_species FILE        specify for each read to which species it belongs to" << endl
+    << "  --species_id INT              map only reads the belong to this species" << endl
     << "algorithm:" << endl
     << "  -S, --single-path-mode        produce single-path alignments (GAM) instead of multipath alignments (GAMP) (ignores -sua)" << endl
     << "  -s, --snarls FILE             align to alternate paths in these snarls" << endl
@@ -112,6 +114,8 @@ int main_mpmap(int argc, char** argv) {
     #define OPT_SUPPRESS_TAIL_ANCHORS 1005
     #define OPT_TOP_TRACEBACKS 1006
     #define OPT_MIN_DIST_CLUSTER 1007
+    #define OPT_READ_TO_SPECIES 1008
+    #define OPT_SPECIES_ID 1009
     string matrix_file_name;
     string xg_name;
     string gcsa_name;
@@ -123,6 +127,8 @@ int main_mpmap(int argc, char** argv) {
     string fastq_name_1;
     string fastq_name_2;
     string gam_file_name;
+    string readToSpeciesFile;
+    int speciesId = NAN;
     int match_score = default_match;
     int mismatch_score = default_mismatch;
     int gap_open_score = default_gap_open;
@@ -262,6 +268,8 @@ int main_mpmap(int argc, char** argv) {
             {"no-qual-adjust", no_argument, 0, 'A'},
             {"threads", required_argument, 0, 't'},
             {"buffer-size", required_argument, 0, 'Z'},
+            {"read_to_species", required_argument, 0, OPT_READ_TO_SPECIES},
+            {"species_id", required_argument, 0, OPT_SPECIES_ID},
             {0, 0, 0, 0}
         };
 
@@ -383,6 +391,14 @@ int main_mpmap(int argc, char** argv) {
                 
             case OPT_SUPPRESS_TAIL_ANCHORS:
                 suppress_tail_anchors = true;
+                break;
+
+            case OPT_READ_TO_SPECIES:
+                readToSpeciesFile = optarg;
+                break;
+
+            case OPT_SPECIES_ID:
+                speciesId = parse<int>(optarg);
                 break;
                 
             case 'v':
@@ -715,6 +731,16 @@ int main_mpmap(int argc, char** argv) {
         cerr << "error:[vg mpmap] The Target Value Search clusterer (-v) requires a distance index (-d)." << endl;
         exit(1);
     }
+
+    if (readToSpeciesFile.empty()){
+        cerr << "error: [vg mpmap] Must specify the read_to_species text file (--read_to_species)." << endl;
+        exit(1);
+    }
+
+    if (std::isnan(speciesId)){
+        cerr << "error:[vg mpmap] Must specify the considered species id. (--species_id)." << endl;
+        exit(1);
+    } 
     
     if (use_min_dist_clusterer && distance_index_name.empty()) {
         cerr << "error:[vg mpmap] The minimum distance clusterer (--min-dist-cluster) requires a distance index (-d)." << endl;
@@ -1359,15 +1385,19 @@ int main_mpmap(int argc, char** argv) {
     // FASTQ input
     if (!fastq_name_1.empty()) {
         if (interleaved_input) {
-            fastq_paired_interleaved_for_each_parallel_after_wait(fastq_name_1, do_paired_alignments,
-                                                                  multi_threaded_condition);
+
+            cerr<<"interleaved option not implemented with this customized version"<<endl;
+            exit(1);
+            // fastq_paired_interleaved_for_each_parallel_after_wait(fastq_name_1, do_paired_alignments,
+                                                                //   multi_threaded_condition);
         }
         else if (fastq_name_2.empty()) {
-            fastq_unpaired_for_each_parallel(fastq_name_1, do_unpaired_alignments, nullptr, -1); // PP modified this to compile
+            fastq_unpaired_for_each_parallel(fastq_name_1, do_unpaired_alignments, readToSpeciesFile, speciesId); 
         }
         else {
+            // Kevin need is here
             fastq_paired_two_files_for_each_parallel_after_wait(fastq_name_1, fastq_name_2, do_paired_alignments,
-                                                                multi_threaded_condition);
+                                                                multi_threaded_condition, readToSpeciesFile, readToSpeciesFile, speciesId);
         }
     }
     

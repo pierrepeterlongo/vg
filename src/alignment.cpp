@@ -446,7 +446,8 @@ size_t fastq_paired_interleaved_for_each_parallel_after_wait(const string& filen
     
 size_t fastq_paired_two_files_for_each_parallel_after_wait(const string& file1, const string& file2,
                                                            function<void(Alignment&, Alignment&)> lambda,
-                                                           function<bool(void)> single_threaded_until_true) {
+                                                           function<bool(void)> single_threaded_until_true,
+                                                           const string& readToSpeciesFilename1, const string& readToSpeciesFilename2, const int speciesId ) {
     
     gzFile fp1 = (file1 != "-") ? gzopen(file1.c_str(), "r") : gzdopen(fileno(stdin), "r");
     if (!fp1) {
@@ -459,16 +460,31 @@ size_t fastq_paired_two_files_for_each_parallel_after_wait(const string& file1, 
     
     size_t len = 1 << 18; // 256k
     char* buf = new char[len];
+
+
+    gzFile readToSpeciesFile1 = gzopen(readToSpeciesFilename1.c_str(), "r");
+    if (!readToSpeciesFile1) {
+        cerr << "[vg::alignment.cpp] couldn't open " << readToSpeciesFilename1 << endl; exit(1);
+    }
+
+    gzFile readToSpeciesFile2 = gzopen(readToSpeciesFilename2.c_str(), "r");
+    if (!readToSpeciesFile2) {
+        cerr << "[vg::alignment.cpp] couldn't open " << readToSpeciesFilename2 << endl; exit(1);
+    }
+    char* speciesBuffer = new char[len];
     
     function<bool(Alignment&, Alignment&)> get_pair = [&](Alignment& mate1, Alignment& mate2) {
-        return get_next_alignment_pair_from_fastqs(fp1, fp2, buf, len, mate1, mate2, nullptr, nullptr, -1, nullptr); // PP: DEBUG FOR COMPILATION
+        return get_next_alignment_pair_from_fastqs(fp1, fp2, buf, len, mate1, mate2, readToSpeciesFile1, readToSpeciesFile2, speciesId, speciesBuffer); // PP: DEBUG FOR COMPILATION
     };
     
     size_t nLines = paired_for_each_parallel_after_wait(get_pair, lambda, single_threaded_until_true);
     
     delete[] buf;
+    delete[] speciesBuffer;
     gzclose(fp1);
     gzclose(fp2);
+    gzclose(readToSpeciesFile1);
+    gzclose(readToSpeciesFile2);
     return nLines;
 }
 

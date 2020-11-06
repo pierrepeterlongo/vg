@@ -49,7 +49,8 @@ size_t fastq_paired_two_files_for_each_parallel(const string& file1, const strin
     
 size_t fastq_paired_two_files_for_each_parallel_after_wait(const string& file1, const string& file2,
                                                            function<void(Alignment&, Alignment&)> lambda,
-                                                           function<bool(void)> single_threaded_until_true);
+                                                           function<bool(void)> single_threaded_until_true,
+                                                           const string& readToSpeciesFilename1, const string& readToSpeciesFilename2, const int speciesId);
 
 bam_hdr_t* hts_file_header(string& filename, string& header);
 bam_hdr_t* hts_string_header(string& header,
